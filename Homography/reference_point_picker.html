@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Tennis court and player point picker</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#eef3f6;color:#183447;font:14px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}header{padding:16px 22px;background:#17374a;color:white}h1{font-size:21px;margin:0 0 7px}p{margin:6px 0}.toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:12px 20px;background:white;border-bottom:1px solid #c8d8e1}button,.file{background:white;border:1px solid #bdcfd8;border-radius:6px;padding:8px 12px;color:#153a50;font:inherit;cursor:pointer}button:hover,.file:hover{background:#e9f6fa}.primary{background:#007e88;color:white;border-color:#007e88}.primary:hover{background:#00636c}input[type=file]{display:none}select{max-width:230px;padding:7px;border:1px solid #b7cbd5;border-radius:5px;background:white;color:#183447}input[type=number]{width:90px;padding:7px;border:1px solid #b7cbd5;border-radius:5px}label{cursor:pointer}.muted{color:#627b89}.viewport{height:53vh;min-height:320px;margin:12px 20px 0;overflow:hidden;position:relative;background:#233744;border-radius:7px;touch-action:none;cursor:crosshair}canvas{display:block;width:100%;height:100%}.readout{display:flex;justify-content:space-between;margin:7px 20px;font-variant-numeric:tabular-nums}.panel{background:white;margin:12px 20px;border-radius:7px;padding:12px}table{width:100%;border-collapse:collapse;font-size:14px}th,td{text-align:left;padding:9px 10px;border-bottom:1px solid #e3ebef}th{color:#5b7380;font-size:12px;text-transform:uppercase}tr.selected{background:#def4f5}tbody tr{cursor:pointer}.controls{display:flex;gap:9px;align-items:center;flex-wrap:wrap;margin-top:12px}.status{margin:8px 20px 16px;color:#245b69;min-height:20px}.guide{font-size:12px;line-height:1.5}.badge{background:#daf1ed;color:#176052;border-radius:12px;padding:3px 9px;font-size:12px}.spacer{flex:1}a{color:#007e88}
+</style>
+<header><h1>Court references and player midpoint picker</h1><p>Upload a frame extracted from your video, select five ground references, and save their original pixel coordinates.</p></header>
+<div class="toolbar"><label>Mode <select id="mode"><option value="player">Player midpoint</option><option value="reference" selected>Court reference points</option></select></label><label>Image <select id="imageChoice" disabled><option value="uploaded" id="uploadedOption" selected>Upload a frame</option></select></label><label class="file primary" for="file">Upload image from computer</label><input id="file" type="file" accept="image/png,image/jpeg,image/webp,image/bmp,image/tiff"><button id="fit">Fit image</button><button id="one">100%</button><button id="plus">Zoom +</button><button id="minus">Zoom −</button><button id="undo">Undo</button><button id="clear">Clear selected</button><label><input id="auto" type="checkbox" checked> Select next after click</label><span class="spacer"></span><button id="save" class="primary">Save points JSON</button></div>
+<div class="readout"><span id="imageInfo">Upload a frame to begin.</span><span id="zoomInfo"></span></div>
+<div class="viewport" id="viewport"><canvas id="canvas"></canvas></div>
+<div class="readout"><span id="cursor">Pixel: —</span><span class="muted">Drop an image here · Click: place point · Wheel: zoom · Right-drag / Space-drag: pan</span></div>
+<div class="panel"><table><thead><tr><th>ID</th><th>Selected point</th><th>X (m)</th><th>Y (m)</th><th>u (pixel)</th><th>v (pixel)</th></tr></thead><tbody id="rows"></tbody></table><div class="controls"><strong id="selectedLabel"></strong><label>u <input id="u" type="number" min="0" step="1"></label><label>v <input id="v" type="number" min="0" step="1"></label><button id="apply">Apply coordinates</button><span id="count" class="badge"></span><span class="spacer"></span><button id="reset">Reset all points</button></div><p class="guide muted">Pixel origin: upper left of the original image. Upload a frame with the same resolution, crop and lens correction as the input video. Original pixel coordinates are saved regardless of display zoom. Reference mode: select the five ground references and save reference_points.json in Homography. World coordinates are preset examples; edit the exported JSON for different references. Player mode exports one manually selected pixel. No lens correction is performed here.</p></div>
+<div id="status" class="status" role="status"></div>
+<script>
+'use strict';
+const REFERENCE_TEMPLATE=[{"id": "A", "name": "Left net post: center of ground contact", "world_xyz_m": [-6.4, 11.88, 0]}, {"id": "B", "name": "Right net post: center of ground contact", "world_xyz_m": [6.4, 11.88, 0]}, {"id": "C", "name": "Left singles sideline: far green marker on the baseline", "world_xyz_m": [-4.115, 23.77, 0]}, {"id": "D", "name": "Right singles sideline: first pink marker toward camera from the far green marker (Y=21.77 m)", "world_xyz_m": [4.115, 21.77, 0]}, {"id": "E", "name": "Right singles sideline: second pink marker toward camera from the far green marker (Y=19.77 m)", "world_xyz_m": [4.115, 19.77, 0]}];
+const PLAYER_TEMPLATE=[{id:"P",name:"Player midpoint at ground level",world_xyz_m:null}];
+let mode="reference",TEMPLATE=REFERENCE_TEMPLATE;const DEFAULT_INFO={name:"No image loaded",sha256:null,width:0,height:0};
+const canvas=document.querySelector('#canvas'),ctx=canvas.getContext('2d'),viewport=document.querySelector('#viewport');
+const $=s=>document.querySelector(s);let image=new Image(),info={...DEFAULT_INFO},points=TEMPLATE.map(()=>null),selected=0,history=[],scale=1,ox=0,oy=0,cw=0,ch=0,drag=null,space=false,lastClick=null;
+const stateKey=()=> (mode==='reference'?'tennis-reference-picker-v1-':'tennis-player-midpoint-v1-')+(info.sha256||info.name+':'+info.width+'x'+info.height);
+function status(t){$('#status').textContent=t;}
+function toImage(x,y){const u=(x-ox)/scale,v=(y-oy)/scale;if(u<0||v<0||u>=image.width||v>=image.height)return null;return [Math.min(image.width-1,Math.round(u)),Math.min(image.height-1,Math.round(v))];}
+function toScreen(p){return [ox+p[0]*scale,oy+p[1]*scale];}
+function persist(){try{localStorage.setItem(stateKey(),JSON.stringify({points,sha256:info.sha256}));}catch(e){status('Browser draft storage unavailable. Save JSON to keep your selections.');}}
+function remember(){history.push(points.map(p=>p?[...p]:null));}
+function select(i){selected=i;updateTable();draw();}
+function updateTable(){
+ $('#rows').innerHTML='';TEMPLATE.forEach((r,i)=>{const tr=document.createElement('tr');if(i===selected)tr.className='selected';
+ const values=[r.id,r.name,r.world_xyz_m?.[0]??'—',r.world_xyz_m?.[1]??'—',points[i]?.[0]??'—',points[i]?.[1]??'—'];for(const v of values){const td=document.createElement('td');td.textContent=v;tr.append(td);}tr.onclick=()=>select(i);$('#rows').append(tr);});
+ $('#selectedLabel').textContent='Selected: '+TEMPLATE[selected].id;$('#u').value=points[selected]?.[0]??'';$('#v').value=points[selected]?.[1]??'';$('#u').max=image.width-1;$('#v').max=image.height-1;$('#count').textContent=points.filter(Boolean).length+' / '+TEMPLATE.length+' selected';
+}
+function draw(){
+ ctx.setTransform(devicePixelRatio,0,0,devicePixelRatio,0,0);ctx.fillStyle='#233744';ctx.fillRect(0,0,cw,ch);if(!image.complete||!image.naturalWidth)return;
+ ctx.imageSmoothingEnabled=scale<3;ctx.drawImage(image,ox,oy,image.width*scale,image.height*scale);
+ for(let i=0;i<points.length;i++){if(!points[i])continue;const [x,y]=toScreen(points[i]),color=i===selected?'#ffe35b':'#00ffff';ctx.strokeStyle='#142c3b';ctx.lineWidth=4;ctx.beginPath();ctx.moveTo(x-12,y);ctx.lineTo(x+12,y);ctx.moveTo(x,y-12);ctx.lineTo(x,y+12);ctx.stroke();ctx.strokeStyle=color;ctx.lineWidth=2;ctx.stroke();ctx.beginPath();ctx.arc(x,y,7,0,Math.PI*2);ctx.stroke();ctx.font='bold 14px Arial';const text=TEMPLATE[i].id+' ('+points[i].join(', ')+')';const tw=ctx.measureText(text).width;let tx=Math.min(cw-tw-8,Math.max(4,x+14)),ty=Math.max(20,Math.min(ch-5,y-12));ctx.fillStyle='#102834e0';ctx.fillRect(tx-3,ty-16,tw+6,21);ctx.fillStyle=color;ctx.fillText(text,tx,ty);}
+ $('#zoomInfo').textContent=Math.round(scale*100)+'% · original '+image.width+' × '+image.height;
+}
+function fit(){scale=Math.min((cw-10)/image.width,(ch-10)/image.height);ox=(cw-image.width*scale)/2;oy=(ch-image.height*scale)/2;draw();}
+function resize(){const b=viewport.getBoundingClientRect();cw=b.width;ch=b.height;canvas.width=Math.round(cw*devicePixelRatio);canvas.height=Math.round(ch*devicePixelRatio);draw();}
+function zoom(f,x=cw/2,y=ch/2){const u=(x-ox)/scale,v=(y-oy)/scale;scale=Math.max(.03,Math.min(12,scale*f));ox=x-u*scale;oy=y-v*scale;draw();}
+function setPoint(p){remember();points[selected]=p;lastClick=selected;persist();updateTable();draw();status('Recorded '+TEMPLATE[selected].id+': ('+p.join(', ')+'). Draft saved in this browser.');}
+function coords(e){const b=canvas.getBoundingClientRect();return [e.clientX-b.left,e.clientY-b.top];}
+canvas.addEventListener('pointerdown',e=>{const [x,y]=coords(e);if(e.button===2||e.button===1||space){drag={x,y,ox,oy};canvas.setPointerCapture(e.pointerId);return;}if(e.button!==0)return;const p=toImage(x,y);if(!p)return;setPoint(p);if($('#auto').checked){const next=points.findIndex((p,i)=>i>selected&&!p);if(next>=0)select(next);}if(points.every(Boolean))status(mode==='player'?'Player midpoint recorded. Save player_point.json in Homography. It holds one image at a time.':'All references selected. Review A–E, then save the reference JSON.');});
+canvas.addEventListener('pointermove',e=>{const [x,y]=coords(e);if(drag){ox=drag.ox+x-drag.x;oy=drag.oy+y-drag.y;draw();}const p=toImage(x,y);$('#cursor').textContent=p?'Pixel: u = '+p[0]+', v = '+p[1]:'Pixel: —';});
+for(const event of ['pointerup','pointercancel'])canvas.addEventListener(event,e=>{drag=null;});canvas.addEventListener('contextmenu',e=>e.preventDefault());
+canvas.addEventListener('wheel',e=>{e.preventDefault();const [x,y]=coords(e);zoom(Math.exp(-e.deltaY*.002),x,y);},{passive:false});
+window.addEventListener('keydown',e=>{if(e.code==='Space'&&!['INPUT','TEXTAREA'].includes(document.activeElement.tagName)){space=true;e.preventDefault();}if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='z'){e.preventDefault();undo();}if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='s'){e.preventDefault();saveJSON();}});window.addEventListener('keyup',e=>{if(e.code==='Space')space=false;});window.addEventListener('blur',()=>{space=false;drag=null;});
+function undo(){if(!history.length)return;points=history.pop();persist();updateTable();draw();status('Last selection undone.');}
+$('#fit').onclick=fit;$('#one').onclick=()=>zoom(1/scale);$('#plus').onclick=()=>zoom(1.5);$('#minus').onclick=()=>zoom(1/1.5);$('#undo').onclick=undo;
+$('#clear').onclick=()=>{remember();points[selected]=null;persist();updateTable();draw();};
+$('#apply').onclick=()=>{const u=Number($('#u').value),v=Number($('#v').value);if($('#u').value===''||$('#v').value===''||!Number.isInteger(u)||!Number.isInteger(v)||u<0||v<0||u>=image.width||v>=image.height){status('Enter integer coordinates inside the original image bounds.');return;}setPoint([u,v]);};
+$('#reset').onclick=()=>{remember();points=TEMPLATE.map(()=>null);persist();select(0);status('All points cleared. Undo is available.');};
+function payload(){if(mode==='player')return {pixel_uv:points[0]};return {points:TEMPLATE.map((r,i)=>({id:r.id,name:r.name,pixel_uv:points[i],world_xyz_m:r.world_xyz_m}))};}
+function complete(){if(points.every(Boolean))return true;status(mode==='player'?'Click the player midpoint first.':'Select all five reference points first. Drafts remain in browser storage.');return false;}
+function download(blob,name){const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),2000);}
+function exportBase(){return mode==='reference'?'reference_points':'player_point';}
+async function saveJSON(){if(!complete())return;const name=exportBase()+'.json';const blob=new Blob([JSON.stringify(payload(),null,2)],{type:'application/json'});if(window.showSaveFilePicker){try{const handle=await window.showSaveFilePicker({suggestedName:name,types:[{description:'JSON point selection',accept:{'application/json':['.json']}}]});const w=await handle.createWritable();await w.write(blob);await w.close();status('Saved '+name+'. Keep it in Homography. No H applied.');return;}catch(e){if(e.name==='AbortError')return;}}download(blob,name);status('Downloaded '+name+'. Move it from Downloads to Homography. No H applied.');}
+$('#save').onclick=saveJSON;
+function restoreDraft(){points=TEMPLATE.map(()=>null);history=[];try{const saved=JSON.parse(localStorage.getItem(stateKey()));if(saved?.points?.length===TEMPLATE.length&&saved.points.every(p=>p===null||(Array.isArray(p)&&p.length===2&&p.every(Number.isInteger)&&p[0]>=0&&p[1]>=0&&p[0]<image.width&&p[1]<image.height)))points=saved.points;}catch(e){}selected=Math.max(0,points.findIndex(p=>!p));updateTable();draw();}
+function load(src,newInfo){if(image.complete&&image.naturalWidth)persist();info={...newInfo};image.onload=()=>{info.width=image.width;info.height=image.height;$('#imageInfo').textContent=info.name;restoreDraft();resize();fit();status(mode==='player'?'Select the midpoint between the shoes at ground level, then save this image JSON.':'Choose A–E on this uploaded frame. Export JSON after review.');};image.src=src;}
+function changeMode(value){persist();mode=value==='reference'?'reference':'player';TEMPLATE=mode==='player'?PLAYER_TEMPLATE:REFERENCE_TEMPLATE;$('#mode').value=mode;restoreDraft();status(mode==='player'?'Player mode: select ONE midpoint. Only the selected pixel is exported.':'Reference mode: A–E. Select the ground references on your uploaded frame.');}
+$('#mode').onchange=e=>changeMode(e.target.value);
+
+async function openUploadedImage(f){
+ if(!f)return;
+ status('Opening '+f.name+' locally…');
+ const data=await f.arrayBuffer();let hash=null;
+ try{const digest=await crypto.subtle.digest('SHA-256',data);hash=[...new Uint8Array(digest)].map(x=>x.toString(16).padStart(2,'0')).join('');}catch(e){}
+ const reader=new FileReader();
+ reader.onerror=()=>status('Cannot read this file. Choose a PNG or JPEG image.');
+ reader.onload=()=>{
+  const candidate=new Image();
+  candidate.onerror=()=>status('Cannot decode this image. Choose a PNG or JPEG image.');
+  candidate.onload=()=>{
+   const option=$('#uploadedOption');option.disabled=false;option.textContent=f.name;
+   $('#imageChoice').value='uploaded';$('#imageChoice').disabled=false;
+   load(reader.result,{name:f.name,path:null,sha256:hash});
+  };
+  candidate.src=reader.result;
+ };
+ reader.readAsDataURL(f);
+}
+$('#file').onchange=e=>{const f=e.target.files[0];e.target.value='';return openUploadedImage(f);};
+for(const name of ['dragenter','dragover'])viewport.addEventListener(name,e=>{e.preventDefault();viewport.style.outline='3px solid #00c2ca';});
+viewport.addEventListener('dragleave',()=>{viewport.style.outline='';});
+viewport.addEventListener('drop',e=>{e.preventDefault();viewport.style.outline='';openUploadedImage(e.dataTransfer.files[0]);});
+new ResizeObserver(resize).observe(viewport);resize();updateTable();status('Upload a frame, select A–E, then save reference_points.json.');
+// Self-check exact coordinate conversion at different zoom/offsets.
+window.pickerSelfTest=()=>{const old=[scale,ox,oy];for(const z of [.23,1,3.7]){scale=z;ox=-123.4;oy=45.6;const p=[Math.floor(image.width/2),Math.floor(image.height/2)];const s=toScreen(p);const back=toImage(...s);if(back[0]!==p[0]||back[1]!==p[1])throw Error('Coordinate conversion mismatch');} [scale,ox,oy]=old;return {passed:true,points:TEMPLATE.length,world_Y:TEMPLATE.map(p=>p.world_xyz_m?.[1]??null),image_size:[image.width,image.height]};};
+</script></html>

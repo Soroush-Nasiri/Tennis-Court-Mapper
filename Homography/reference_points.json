@@ -1,0 +1,69 @@
+{
+  "points": [
+    {
+      "id": "A",
+      "name": "Left net post: center of ground contact",
+      "pixel_uv": [
+        76,
+        869
+      ],
+      "world_xyz_m": [
+        -6.4,
+        11.88,
+        0
+      ]
+    },
+    {
+      "id": "B",
+      "name": "Right net post: center of ground contact",
+      "pixel_uv": [
+        1515,
+        900
+      ],
+      "world_xyz_m": [
+        6.4,
+        11.88,
+        0
+      ]
+    },
+    {
+      "id": "C",
+      "name": "Left singles sideline: far green marker on the baseline",
+      "pixel_uv": [
+        571,
+        844
+      ],
+      "world_xyz_m": [
+        -4.115,
+        23.77,
+        0
+      ]
+    },
+    {
+      "id": "D",
+      "name": "Right singles sideline: first pink marker toward camera from the far green marker (Y=21.77 m)",
+      "pixel_uv": [
+        1050,
+        857
+      ],
+      "world_xyz_m": [
+        4.115,
+        21.77,
+        0
+      ]
+    },
+    {
+      "id": "E",
+      "name": "Right singles sideline: second pink marker toward camera from the far green marker (Y=19.77 m)",
+      "pixel_uv": [
+        1077,
+        863
+      ],
+      "world_xyz_m": [
+        4.115,
+        19.77,
+        0
+      ]
+    }
+  ]
+}
